@@ -3,18 +3,28 @@
 #set -x
 set -e
 
-VERSION=0.1
+# TODO: configurable
+VERSION=0.2
 EDITOR=emacs
-WORKDIR=$PWD
+
+WORKDIR='/tmp'
 
 CDROM='/dev/cdrom'
 OFFSET=697
 
-ENCODED_ROOT="/home/maciek/Desktop/rip.sh"
+ENCODED_ROOT="${1:-$HOME/Music}"
 ENCODE_OPTS="-V 2 --id3v2-only"
 
-# TODO: take option
+
 TRACK_OFFSET=0
+while getopts "o" opt
+do
+    case "$opt" in
+	o)TRACK_OFFSET="$OPTARG";;
+    esac
+done
+shift $((OPTIND-1))
+
 
 DISC_INFO=`cd-discid $CDROM`
 DISC_ID=`echo $DISC_INFO | cut -d\  -f1`
@@ -29,14 +39,14 @@ CDDB_HOST=`hostname`
 # Issue a remote CDDB command (if not cached); arguments are the command in question and its arguments (as a single parameter)
 cddb() {
     #TODO: just echo the filename instead of using a separate function
-    FILENAME=`cddb_file "$1" "$2"`
+    FILENAME="`cddb_file "$1" "$2"`"
     CDDB_REQUEST="${CDDB_URL}?cmd=cddb+${1}+${2}&hello=${CDDB_USER}+${CDDB_HOST}+$(basename $0)+${VERSION}&proto=${CDDB_VER}"
     echo CDDB request: $CDDB_REQUEST
     test -f "$FILENAME" || wget -O "$FILENAME" "$CDDB_REQUEST"
 }
 
 cddb_file() {
-    echo "$2.${1}" | tee result-filename # | sed -r 's/\s+/_/g' 
+    echo "$2.${1}"
 }
 
 cddb query "$DISC_INFO"
@@ -65,17 +75,11 @@ fi
 cddb read "$SELECTED_DISC"
 CDDB_METADATA="`cddb_file read \"$SELECTED_DISC\"`"
 CDDB_STATUS="$(head -c3 "$CDDB_METADATA")"
-METADATA_FILE=`mktemp`
+METADATA_FILE=`mktemp "$WORKDIR/metadata.XXXXX"`
 
-# generate a file with
-# - album artist
-# - album title
-# - year
-# - genre
-# - track no.
-# - artist
-# - title
-# for each track
+# Generate a file with
+#   album artist / album title / year / genre / track no. / artist / title
+# for each track. The user can edit this pre-encoding to adjust CDDB results.
 
 DTITLE="$(sed -r -n 's_^DTITLE=(.*)$_\1_p' "$CDDB_METADATA" | tr -d '\r')"
 # Bash string mangling: this strips the longest trailing match
@@ -85,18 +89,21 @@ ALBUM_TITLE="${DTITLE#* / }"
 YEAR="$(sed -r -n 's_^DYEAR=(.*)_\1_p' "$CDDB_METADATA" | tr -d '\r')"
 GENRE="$(sed -r -n 's_^DGENRE=(.*)_\1_p' "$CDDB_METADATA" | tr -d '\r')"
 
-echo "Metadata is $ALBUM_ARTIST $ALBUM_TITLE $YEAR $GENRE"
+# This is simplistic. We could be dealing with a split single, a
+# soundtrack, or something else that has more than one artist. We may
+# want something better.
+if $(echo "$ALBUM_ARTIST" | grep -i '^Various' &>/dev/null);
+then 
+    IS_VA=true
+fi
 
 let i=$TRACK_OFFSET+1
 grep "^TTITLE" "$CDDB_METADATA" | while read track;
 do
-    # Note that this is not going to apply to all discs: some non-VA
-    # discs use ' / ' as a general-purpose delimiter, so we test the album artist.
     TRACK_NO=$i
     TRACK_INFO="$(echo $track | sed -r -n 's_^TTITLE[0-9]{1,3}=(.*)$_\1_p' | tr -d '\r')"
-    if $(echo "$ALBUM_ARTIST" | grep -i '^Various' &>/dev/null);
+    if test -n "$IS_VA";
     then
-	# See above: we're playing fast and loose with the delimiter at the moment
 	TRACK_ARTIST="${TRACK_INFO%% / *}"
 	TRACK_TITLE="${TRACK_INFO#* / }"
     else
@@ -108,26 +115,29 @@ do
     let i+=1
 done
 
-cat "$METADATA_FILE"
-#$EDITOR "$METADATA_FILE"
+$EDITOR "$METADATA_FILE"
+
+# TODO: offer a way to abort here
 
 while IFS=$'\011' read alb_artist alb_title year genre track_no artist title
 do
-    WAV_FILE=`mktemp`
-    # rip command: cdparanoia [.160517]- -d /dev/cdrom -O 697 "/home/maciek/Desktop/Crosby, Stills & Nash/temp_sr0/track10_2.wav" 2>&1
+    WAV_FILE=`mktemp "$WORKDIR/track_${track_no}.wav.XXXXX"`
     cdparanoia $track_no -d "$CDROM" -O $OFFSET "$WAV_FILE"
-# encode command: lame -V 2 --id3v2-only --tl "Velocifero" --ty "2008" --tg "Electronic" --tv TXXX=DISCID="a50cc30d" --ta "Ladytron" --tt "Deep Blue" --tn 11/13 "/home/maciek/Desktop/Ladytron/temp_sr0/track11_1.wav" "/home/maciek/Desktop/Ladytron/Velocifero/11-Deep Blue.mp3" 2>&1
+    # TODO: we should just create the dir up front, but that's not that easy
+    # since our intermediate metadata file is per-track. If we use the original
+    # album artist info, this could be inconsistent with the edited metadata file.
     ENCODED_DIR="${ENCODED_ROOT}/${alb_artist}/${alb_title}"
     mkdir -p "$ENCODED_DIR"
-    # TODO: set album artist for VA albums
-    lame $ENCODE_OPTS --tv TXXX=DISCID="$DISC_ID" --tl "$alb_title" --ty "$year" --tg "$genre" --ta "$artist" --tt "$title" --tn "$track_no" "$WAV_FILE" "$ENCODED_DIR/$(printf "%02d" $track_no)-${title}"
+
+    LAME_OPTS="$ENCODE_OPTS --tv TXXX=DISCID=$DISC_ID"
+    if test -n "$IS_VA";
+    then
+	LAME_OPTS="$LAME_OPTS --tv \"ALBUM ARTIST\"=\"$alb_artist\""
+    fi
+    lame $LAME_OPTS --tl "$alb_title" --ty "$year" --tg "$genre" --ta "$artist" --tt "$title" --tn "$track_no" "$WAV_FILE" "$ENCODED_DIR/$(printf "%02d" $track_no)-${title}.mp3"
 done < "$METADATA_FILE"
 
-#if [ "$CLEANUP" ];
-#then
-#    # remove metadata files and track files
-#fi
-
+#TODO: cleanup of $METADATA_FILE and all the $WAV_FILEs for the tracks
 
 
 
