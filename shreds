@@ -3,19 +3,49 @@
 #set -x
 set -e
 
-# TODO: configurable
 VERSION=0.2
-EDITOR=emacs
 
+E_RIP_CHECKSUM_MISMATCH=13
+
+
+DEFAULTS=$(cat <<'EOF'
+# for editing cddb metadata before encoding
+EDITOR="${EDITOR:-emacs}"
+
+# for temporary wave files when ripping; cleaned up in normal operation
 WORKDIR='/tmp'
+# for CDDB metadata (files here are cached indefinitely, but can be safely deleted)
+CDDBDIR=$HOME/.shreds/cddb
 
 CDROM='/dev/cdrom'
-OFFSET=697
+# CD drive offset; see http://www.accuraterip.com/driveoffsets.htm
+# TODO: make this automagic
+OFFSET=0
 
+# Number of times to rip (and confirm checksums of) each track
+RIP_ATTEMPTS=2
+
+# Where final encoded (e.g., MP3) files are places
 ENCODED_ROOT="${1:-$HOME/Music}"
+# Options passed to encoder
 ENCODE_OPTS="-V 2 --id3v2-only"
 
+EOF
+)
 
+if [ ! -f ~/.shreds/config ];
+then
+    mkdir -p ~/.shreds
+    echo "$DEFAULTS" > ~/.shreds/config
+fi
+
+source ~/.shreds/config
+
+test -d "$WORKDIR" || mkdir -p "$WORKDIR"
+test -d "$CDDBDIR" || mkdir -p "$CDDBDIR"
+
+# for multi-disc albums ripped to a series of contiguous tracks
+# we may want this in the disc metadata file eventually
 TRACK_OFFSET=0
 while getopts "o" opt
 do
@@ -38,15 +68,16 @@ CDDB_HOST=`hostname`
 
 # Issue a remote CDDB command (if not cached); arguments are the command in question and its arguments (as a single parameter)
 cddb() {
-    #TODO: just echo the filename instead of using a separate function
     FILENAME="`cddb_file "$1" "$2"`"
     CDDB_REQUEST="${CDDB_URL}?cmd=cddb+${1}+${2}&hello=${CDDB_USER}+${CDDB_HOST}+$(basename $0)+${VERSION}&proto=${CDDB_VER}"
     echo CDDB request: $CDDB_REQUEST
+    # see if we have this request cached already
+    # TODO: expire cache entries
     test -f "$FILENAME" || wget -O "$FILENAME" "$CDDB_REQUEST"
 }
 
 cddb_file() {
-    echo "$2.${1}"
+    echo "$CDDBDIR/$2.${1}"
 }
 
 cddb query "$DISC_INFO"
@@ -75,7 +106,8 @@ fi
 cddb read "$SELECTED_DISC"
 CDDB_METADATA="`cddb_file read \"$SELECTED_DISC\"`"
 CDDB_STATUS="$(head -c3 "$CDDB_METADATA")"
-METADATA_FILE=`mktemp "$WORKDIR/metadata.XXXXX"`
+# this is the nicely formatted metadata file we will be dealing with
+METADATA_FILE="${CDDB_METADATA}-formatted"
 
 # Generate a file with
 #   album artist / album title / year / genre / track no. / artist / title
@@ -121,11 +153,27 @@ $EDITOR "$METADATA_FILE"
 
 while IFS=$'\011' read alb_artist alb_title year genre track_no artist title
 do
-    WAV_FILE=`mktemp "$WORKDIR/track_${track_no}.wav.XXXXX"`
-    cdparanoia $track_no -d "$CDROM" -O $OFFSET "$WAV_FILE"
-    # TODO: we should just create the dir up front, but that's not that easy
-    # since our intermediate metadata file is per-track. If we use the original
-    # album artist info, this could be inconsistent with the edited metadata file.
+    LAST_CHECKSUM=
+    WAV_FILE=
+    for attempt in `seq $RIP_ATTEMPTS`;
+    do
+	rm -f "$WAV_FILE"
+	WAV_FILE=`mktemp "$WORKDIR/track_${track_no}.wav.${attempt}.XXXXX"`
+	cdparanoia $track_no -d "$CDROM" -O $OFFSET "$WAV_FILE"
+	CURR_CHECKSUM=`mdsum | cut -d\  -f1`
+	if [ -n "$LAST_CHECKSUM" -a "$LAST_CHECKSUM" != "$CURR_CHECKSUM" ];
+	then
+	    echo "Error ripping track ${track_no}"
+	    # TODO: auto-retry, as these are sometimes transient
+	    exit $E_RIP_CHECKSUM_MISMATCH
+	fi
+	LAST_CHECKSUM=$CURR_CHECKSUM
+    done
+
+    # N.B.: Technically, it's possible that the album artist and album
+    # title are different from track to track. I can't imagine why that
+    # would be a good idea, but it's actually easier to support this than
+    # to block it
     ENCODED_DIR="${ENCODED_ROOT}/${alb_artist}/${alb_title}"
     mkdir -p "$ENCODED_DIR"
 
@@ -135,9 +183,7 @@ do
 	LAME_OPTS="$LAME_OPTS --tv \"ALBUM ARTIST\"=\"$alb_artist\""
     fi
     lame $LAME_OPTS --tl "$alb_title" --ty "$year" --tg "$genre" --ta "$artist" --tt "$title" --tn "$track_no" "$WAV_FILE" "$ENCODED_DIR/$(printf "%02d" $track_no)-${title}.mp3"
+    rm -f "$WAV_FILE"
 done < "$METADATA_FILE"
 
-#TODO: cleanup of $METADATA_FILE and all the $WAV_FILEs for the tracks
-
-
-
+# TODO: cleanup metadata eventually
