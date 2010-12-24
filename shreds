@@ -6,7 +6,7 @@ set -e
 VERSION=0.2
 
 E_RIP_CHECKSUM_MISMATCH=13
-
+E_CDDB_READ_FAILED=14
 
 DEFAULTS=$(cat <<'EOF'
 # for editing cddb metadata before encoding
@@ -97,17 +97,36 @@ elif [ "$CDDB_STATUS" -eq 200 ];
 then
     # single result
     SELECTED_DISC="`cut -d\  -f2,3 \"$CDDB_LISTING\"`"
+elif [ "$CDDB_STATUS" -eq 202 ];
+then
+    : # no results found
 else
     # errors
     echo "ERROR: Unrecognized status."
     exit $CDDB_STATUS
 fi
 
-cddb read "$SELECTED_DISC"
-CDDB_METADATA="`cddb_file read \"$SELECTED_DISC\"`"
-CDDB_STATUS="$(head -c3 "$CDDB_METADATA")"
-# this is the nicely formatted metadata file we will be dealing with
-METADATA_FILE="${CDDB_METADATA}-formatted"
+if [ -n "$SELECTED_DISC" ];
+then
+    cddb read "$SELECTED_DISC"
+    CDDB_METADATA="`cddb_file read \"$SELECTED_DISC\"`"
+    CDDB_STATUS="$(head -c3 "$CDDB_METADATA")"
+    if [ ! "$CDDB_STATUS" -eq 210 ];
+    then
+	echo "Could not read $SELECTED_DISC metadata from CDDB"
+	exit $E_CDDB_READ_FAILED
+    fi
+    # this is the nicely formatted metadata file we will be dealing with
+    METADATA_FILE="${CDDB_METADATA}-formatted"
+else
+    METADATA_FILE="`cddb_file read \"${DISC_ID}\"`-formatted"
+    TRACK_COUNT=`echo $DISC_INFO | cut -d\  -f2`
+    # Write a dummy metadata file
+    for i in `seq $((1+$TRACK_OFFSET)) $(($TRACK_COUNT+$TRACK_OFFSET))`;
+    do
+	echo -e "album_artist\talbum_title\tyear\tgenre\t$i\ttrack_artist\ttrack_title" >> "$METADATA_FILE"	
+    done
+fi
 
 # Generate a file with
 #   album artist / album title / year / genre / track no. / artist / title
