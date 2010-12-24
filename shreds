@@ -175,7 +175,7 @@ then
     done
 fi
 $EDITOR "$METADATA_FILE"
-if [ $(cut -d\t -f1 "$METADATA_FILE" | uniq | wc -l) -gt 1 ];
+if [ $(cut -d$'\011' -f1 "$METADATA_FILE" | uniq | wc -l) -gt 1 ];
 then
     IS_VA=true
 else
@@ -219,7 +219,7 @@ do
 	LAME_OPTS="$LAME_OPTS --tv \"ALBUM ARTIST\"=\"$alb_artist\""
     fi
 
-    lame $LAME_OPTS --tl "$alb_title" --ty "$year" --tg "$genre" --ta "$artist" --tt "$title" --tn "$track_no" "$WAV_FILE" "$ENCODED_DIR/$(printf "%02d" $track_no)-${safe_title}.mp3"
+    lame "$LAME_OPTS" --tl "$alb_title" --ty "$year" --tg "$genre" --ta "$artist" --tt "$title" --tn "$track_no" "$WAV_FILE" "$ENCODED_DIR/$(printf "%02d" $track_no)-${safe_title}.mp3"
     rm -f "$WAV_FILE"
 done < "$METADATA_FILE"
 
