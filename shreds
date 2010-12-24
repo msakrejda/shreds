@@ -80,6 +80,11 @@ cddb_file() {
     echo "$CDDBDIR/$2.${1}"
 }
 
+sanitize() {
+    # Get rid of characters we don't want in file names
+    echo "$1" | tr ':*?!<>/|\"' '_'
+}
+
 cddb query "$DISC_INFO"
 CDDB_LISTING="`cddb_file query \"$DISC_INFO\"`"
 CDDB_STATUS=$(head -c3 "$CDDB_LISTING")
@@ -170,6 +175,12 @@ then
     done
 fi
 $EDITOR "$METADATA_FILE"
+if [ $(cut -d\t -f1 "$METADATA_FILE" | uniq | wc -l) -gt 1 ];
+then
+    IS_VA=true
+else
+    IS_VA=""
+fi
 
 # TODO: offer a way to abort here
 
@@ -196,7 +207,10 @@ do
     # title are different from track to track. I can't imagine why that
     # would be a good idea, but it's actually easier to support this than
     # to block it
-    ENCODED_DIR="${ENCODED_ROOT}/${alb_artist}/${alb_title}"
+    safe_alb_artist="`sanitize "$alb_artist"`"
+    safe_alb_title="`sanitize "$alb_title"`"
+    safe_title="`sanitize "$title"`"
+    ENCODED_DIR="${ENCODED_ROOT}/${safe_alb_artist}/${safe_alb_title}"
     mkdir -p "$ENCODED_DIR"
 
     LAME_OPTS="$ENCODE_OPTS --tv TXXX=DISCID=$DISC_ID"
@@ -204,7 +218,8 @@ do
     then
 	LAME_OPTS="$LAME_OPTS --tv \"ALBUM ARTIST\"=\"$alb_artist\""
     fi
-    lame $LAME_OPTS --tl "$alb_title" --ty "$year" --tg "$genre" --ta "$artist" --tt "$title" --tn "$track_no" "$WAV_FILE" "$ENCODED_DIR/$(printf "%02d" $track_no)-${title}.mp3"
+
+    lame $LAME_OPTS --tl "$alb_title" --ty "$year" --tg "$genre" --ta "$artist" --tt "$title" --tn "$track_no" "$WAV_FILE" "$ENCODED_DIR/$(printf "%02d" $track_no)-${safe_title}.mp3"
     rm -f "$WAV_FILE"
 done < "$METADATA_FILE"
 
