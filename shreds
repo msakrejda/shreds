@@ -47,7 +47,7 @@ test -d "$CDDBDIR" || mkdir -p "$CDDBDIR"
 # for multi-disc albums ripped to a series of contiguous tracks
 # we may want this in the disc metadata file eventually
 TRACK_OFFSET=0
-while getopts "o" opt
+while getopts "o:" opt
 do
     case "$opt" in
 	o)TRACK_OFFSET="$OPTARG";;
