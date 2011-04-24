@@ -192,7 +192,7 @@ do
     do
 	rm -f "$WAV_FILE"
 	WAV_FILE=`mktemp "$WORKDIR/track_${track_no}.wav.${attempt}.XXXXX"`
-	cdparanoia $track_no -d "$CDROM" -O $OFFSET "$WAV_FILE"
+	cdparanoia $((track_no - TRACK_OFFSET)) -d "$CDROM" -O $OFFSET "$WAV_FILE"
 	CURR_CHECKSUM=`md5sum $WAV_FILE | cut -d\  -f1`
 	if [ -n "$LAST_CHECKSUM" -a "$LAST_CHECKSUM" != "$CURR_CHECKSUM" ];
 	then
