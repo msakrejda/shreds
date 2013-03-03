@@ -139,7 +139,7 @@ then
     fi
 fi
 
-if [ -z "got_metadata" ];
+if [ -z "$got_metadata" ];
 then
     METADATA_FILE="`cddb_file read \"${DISC_ID}\"`-formatted"
     TRACK_COUNT=`echo $DISC_INFO | cut -d\  -f2`
